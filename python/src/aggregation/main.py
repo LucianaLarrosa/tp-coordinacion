@@ -23,22 +23,23 @@ class AggregationFilter:
         self.output_queue = middleware.MessageMiddlewareQueueRabbitMQ(
             MOM_HOST, OUTPUT_QUEUE
         )
-        self.fruit_top = {}  # {client_id: [fruit_items]}
+        self.fruit_top = {}  # {client_id: {fruit: fruitItem}}
+        self.eof_count = {}  # {client_id: eof_count}
 
     def _process_data(self, client_id, fruit, amount):
         logging.info("Processing data message")
-        self.fruit_top[client_id] = self.fruit_top.get(client_id, [])
-        for i in range(len(self.fruit_top[client_id])):
-            if self.fruit_top[client_id][i].fruit == fruit:
-                self.fruit_top[client_id][i] = self.fruit_top[client_id][i] + fruit_item.FruitItem(
-                    fruit, amount
-                )
-                return
-        bisect.insort(self.fruit_top[client_id], fruit_item.FruitItem(fruit, amount))
+        self.fruit_top[client_id] = self.fruit_top.get(client_id, {})
+        self.fruit_top[client_id][fruit] = self.fruit_top[client_id].get(
+            fruit, fruit_item.FruitItem(fruit, 0)
+        ) + fruit_item.FruitItem(fruit, int(amount))
 
     def _process_eof(self, client_id):
         logging.info("Received EOF")
-        fruit_chunk = list(self.fruit_top.get(client_id, [])[-TOP_SIZE:])
+        self.eof_count[client_id] = self.eof_count.get(client_id, 0) + 1
+        if self.eof_count[client_id] < SUM_AMOUNT:
+            return
+        sorted_fruits = sorted(self.fruit_top.get(client_id, {}).values())
+        fruit_chunk = list(sorted_fruits[-TOP_SIZE:])
         fruit_chunk.reverse()
         fruit_top = list(
             map(
@@ -47,9 +48,10 @@ class AggregationFilter:
             )
         )
         self.output_queue.send(message_protocol.internal.serialize([client_id, fruit_top]))
-        del self.fruit_top[client_id]
+        self.fruit_top.pop(client_id, None)
+        self.eof_count.pop(client_id, None)
 
-    def process_messsage(self, message, ack, nack):
+    def process_message(self, message, ack, nack):
         logging.info("Process message")
         fields = message_protocol.internal.deserialize(message)
         if len(fields) == 3:
@@ -59,8 +61,7 @@ class AggregationFilter:
         ack()
 
     def start(self):
-        self.input_exchange.start_consuming(self.process_messsage)
-
+        self.input_exchange.start_consuming(self.process_message)
 
 def main():
     logging.basicConfig(level=logging.INFO)

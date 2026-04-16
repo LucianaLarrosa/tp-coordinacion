@@ -76,14 +76,14 @@ class MessageMiddlewareQueueRabbitMQ(MessageMiddlewareQueue):
 
 class MessageMiddlewareExchangeRabbitMQ(MessageMiddlewareExchange):
 
-    def __init__(self, host, exchange_name, routing_keys):
+    def __init__(self, host, exchange_name, routing_keys, exchange_type="direct"):
         self.exchange_name = exchange_name
         self.routing_keys = routing_keys
 
         self.connection = pika.BlockingConnection(pika.ConnectionParameters(host=host))
         self.channel = self.connection.channel()
         self.channel.exchange_declare(
-            exchange=self.exchange_name, exchange_type="direct", durable=True
+            exchange=self.exchange_name, exchange_type=exchange_type, durable=True
         )
         self.channel.confirm_delivery()
 

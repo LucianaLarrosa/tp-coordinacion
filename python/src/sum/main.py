@@ -24,16 +24,29 @@ class SumFilter:
                 MOM_HOST, AGGREGATION_PREFIX, [f"{AGGREGATION_PREFIX}_{i}"]
             )
             self.data_output_exchanges.append(data_output_exchange)
-        self.amount_by_fruit = {}  # {client_id: {fruit: amount}}
+
+        # Para publicar el EOF recibido
+        self.eof_publish_exchange = middleware.MessageMiddlewareExchangeRabbitMQ(
+            MOM_HOST, "sum_eof_exchange", ["sum_eof"], "fanout"
+        )
+
+        # Para consumir los EOFs 
+        self.eof_consume_exchange = middleware.MessageMiddlewareExchangeRabbitMQ(
+            MOM_HOST, "sum_eof_exchange", ["sum_eof"], "fanout"
+        )
+        
+        self._lock = threading.Lock()
+        self.amount_by_fruit = {}  # {client_id: {fruit: FruitItem}}
 
     def _process_data(self, client_id, fruit, amount):
         logging.info(f"Process data")
-        self.amount_by_fruit[client_id] = self.amount_by_fruit.get(
-            client_id, {}
-        )
-        self.amount_by_fruit[client_id][fruit] = self.amount_by_fruit[client_id].get(
-            fruit, fruit_item.FruitItem(fruit, 0)
-        ) + fruit_item.FruitItem(fruit, int(amount))
+        with self._lock:
+            self.amount_by_fruit[client_id] = self.amount_by_fruit.get(
+                client_id, {}
+            )
+            self.amount_by_fruit[client_id][fruit] = self.amount_by_fruit[client_id].get(
+                fruit, fruit_item.FruitItem(fruit, 0)
+            ) + fruit_item.FruitItem(fruit, int(amount))
 
     def _process_eof(self, client_id):
         logging.info(f"Broadcasting data messages")
@@ -49,18 +62,27 @@ class SumFilter:
         for data_output_exchange in self.data_output_exchanges:
             data_output_exchange.send(message_protocol.internal.serialize([client_id]))
 
-        del self.amount_by_fruit[client_id]
+        self.amount_by_fruit.pop(client_id, None)
 
-    def process_data_messsage(self, message, ack, nack):
+    def process_eof_message(self, message, ack, nack):
+        fields = message_protocol.internal.deserialize(message)
+        with self._lock:
+            self._process_eof(*fields)
+        ack()
+
+    def process_data_message(self, message, ack, nack):
         fields = message_protocol.internal.deserialize(message)
         if len(fields) == 3:
             self._process_data(*fields)
         else:
-            self._process_eof(*fields)
+            self.eof_publish_exchange.send(message)
         ack()
 
     def start(self):
-        self.input_queue.start_consuming(self.process_data_messsage)
+        t = threading.Thread(target=lambda: self.eof_consume_exchange.start_consuming(self.process_eof_message))
+        t.start()
+        self.input_queue.start_consuming(self.process_data_message)
+        t.join()
 
 def main():
     logging.basicConfig(level=logging.INFO)
