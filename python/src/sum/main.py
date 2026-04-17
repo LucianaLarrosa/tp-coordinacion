@@ -2,6 +2,7 @@ import os
 import logging
 import threading
 import hashlib
+import signal
 
 from common import middleware, message_protocol, fruit_item
 
@@ -43,8 +44,11 @@ class SumFilter:
         self._lock = threading.Lock()
         self.amount_by_fruit = {}  # {client_id: {fruit: FruitItem}}
 
+        # SIGTERM handling
+        signal.signal(signal.SIGTERM, self._handle_sigterm)
+
     def _process_data(self, client_id, fruit, amount):
-        logging.info(f"Process data")
+        logging.info("Process data")
         with self._lock:
             fruits_client = self.amount_by_fruit.get(
                 client_id, {}
@@ -56,7 +60,7 @@ class SumFilter:
             self.amount_by_fruit[client_id] = fruits_client
 
     def _process_eof(self, client_id):
-        logging.info(f"Sending data messages")
+        logging.info("Sending data messages")
         for final_fruit_item in self.amount_by_fruit.get(client_id, {}).values():
             aggregator = int(hashlib.md5(final_fruit_item.fruit.encode()).hexdigest(), 16) % AGGREGATION_AMOUNT
 
@@ -66,7 +70,7 @@ class SumFilter:
                 )
             )
 
-        logging.info(f"Broadcasting EOF message")
+        logging.info("Broadcasting EOF message")
         for data_output_exchange in self.data_output_exchanges:
             data_output_exchange.send(message_protocol.internal.serialize([client_id]))
 
@@ -91,6 +95,11 @@ class SumFilter:
         t.start()
         self.input_queue.start_consuming(self.process_data_message)
         t.join()
+
+    def _handle_sigterm(self, signum, frame):
+        logging.info("Received SIGTERM")
+        self.input_queue.stop_consuming()
+        self.eof_consume_exchange.stop_consuming()
 
 def main():
     logging.basicConfig(level=logging.INFO)
