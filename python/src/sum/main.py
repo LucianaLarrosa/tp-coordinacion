@@ -1,6 +1,7 @@
 import os
 import logging
 import threading
+import hashlib
 
 from common import middleware, message_protocol, fruit_item
 
@@ -12,6 +13,10 @@ SUM_PREFIX = os.environ["SUM_PREFIX"]
 SUM_CONTROL_EXCHANGE = "SUM_CONTROL_EXCHANGE"
 AGGREGATION_AMOUNT = int(os.environ["AGGREGATION_AMOUNT"])
 AGGREGATION_PREFIX = os.environ["AGGREGATION_PREFIX"]
+
+EXCHANGE_NAME = "sum_eof_exchange"
+ROUTING_KEY = "sum_eof"
+EXCHANGE_TYPE = "fanout"
 
 class SumFilter:
     def __init__(self):
@@ -27,12 +32,12 @@ class SumFilter:
 
         # Para publicar el EOF recibido
         self.eof_publish_exchange = middleware.MessageMiddlewareExchangeRabbitMQ(
-            MOM_HOST, "sum_eof_exchange", ["sum_eof"], "fanout"
+            MOM_HOST, EXCHANGE_NAME, [ROUTING_KEY], EXCHANGE_TYPE
         )
 
         # Para consumir los EOFs 
         self.eof_consume_exchange = middleware.MessageMiddlewareExchangeRabbitMQ(
-            MOM_HOST, "sum_eof_exchange", ["sum_eof"], "fanout"
+            MOM_HOST, EXCHANGE_NAME, [ROUTING_KEY], EXCHANGE_TYPE
         )
         
         self._lock = threading.Lock()
@@ -41,22 +46,25 @@ class SumFilter:
     def _process_data(self, client_id, fruit, amount):
         logging.info(f"Process data")
         with self._lock:
-            self.amount_by_fruit[client_id] = self.amount_by_fruit.get(
+            fruits_client = self.amount_by_fruit.get(
                 client_id, {}
             )
-            self.amount_by_fruit[client_id][fruit] = self.amount_by_fruit[client_id].get(
+            fruits_client[fruit] = fruits_client.get(
                 fruit, fruit_item.FruitItem(fruit, 0)
             ) + fruit_item.FruitItem(fruit, int(amount))
 
+            self.amount_by_fruit[client_id] = fruits_client
+
     def _process_eof(self, client_id):
-        logging.info(f"Broadcasting data messages")
+        logging.info(f"Sending data messages")
         for final_fruit_item in self.amount_by_fruit.get(client_id, {}).values():
-            for data_output_exchange in self.data_output_exchanges:
-                data_output_exchange.send(
-                    message_protocol.internal.serialize(
-                        [client_id, final_fruit_item.fruit, final_fruit_item.amount]
-                    )
+            aggregator = int(hashlib.md5(final_fruit_item.fruit.encode()).hexdigest(), 16) % AGGREGATION_AMOUNT
+
+            self.data_output_exchanges[aggregator].send(
+                message_protocol.internal.serialize(
+                    [client_id, final_fruit_item.fruit, final_fruit_item.amount]
                 )
+            )
 
         logging.info(f"Broadcasting EOF message")
         for data_output_exchange in self.data_output_exchanges:

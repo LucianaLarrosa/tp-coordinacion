@@ -1,6 +1,5 @@
 import os
 import logging
-import bisect
 
 from common import middleware, message_protocol, fruit_item
 
@@ -23,31 +22,33 @@ class AggregationFilter:
         self.output_queue = middleware.MessageMiddlewareQueueRabbitMQ(
             MOM_HOST, OUTPUT_QUEUE
         )
-        self.fruit_top = {}  # {client_id: {fruit: fruitItem}}
+        self.fruit_top = {}  # {client_id: {fruit: FruitItem}}
         self.eof_count = {}  # {client_id: eof_count}
 
     def _process_data(self, client_id, fruit, amount):
         logging.info("Processing data message")
-        self.fruit_top[client_id] = self.fruit_top.get(client_id, {})
-        self.fruit_top[client_id][fruit] = self.fruit_top[client_id].get(
+        fruit_top_client = self.fruit_top.get(client_id, {})
+        fruit_top_client[fruit] = fruit_top_client.get(
             fruit, fruit_item.FruitItem(fruit, 0)
         ) + fruit_item.FruitItem(fruit, int(amount))
+
+        self.fruit_top[client_id] = fruit_top_client
 
     def _process_eof(self, client_id):
         logging.info("Received EOF")
         self.eof_count[client_id] = self.eof_count.get(client_id, 0) + 1
+
         if self.eof_count[client_id] < SUM_AMOUNT:
             return
-        sorted_fruits = sorted(self.fruit_top.get(client_id, {}).values())
-        fruit_chunk = list(sorted_fruits[-TOP_SIZE:])
-        fruit_chunk.reverse()
-        fruit_top = list(
-            map(
-                lambda fruit_item: (fruit_item.fruit, fruit_item.amount),
-                fruit_chunk,
-            )
-        )
+
+        sorted_fruits = sorted(self.fruit_top.get(client_id, {}).values(), reverse=True)
+        top_sorted_fruits = sorted_fruits[:TOP_SIZE]
+        fruit_top = []
+        for fi in top_sorted_fruits:
+            fruit_top.append((fi.fruit, fi.amount))
+
         self.output_queue.send(message_protocol.internal.serialize([client_id, fruit_top]))
+
         self.fruit_top.pop(client_id, None)
         self.eof_count.pop(client_id, None)
 

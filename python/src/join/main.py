@@ -23,11 +23,27 @@ class JoinFilter:
             MOM_HOST, OUTPUT_QUEUE
         )
 
+        self.partial_tops = {}  # {client_id: [fruit_top]}
+        self.top_count = {}     # {client_id: count}
+
     def process_message(self, message, ack, nack):
         logging.info("Received top")
         client_id, fruit_top = message_protocol.internal.deserialize(message)
-        self.output_queue.send(message_protocol.internal.serialize([client_id, fruit_top]))
+
+        self.partial_tops[client_id] = self.partial_tops.get(client_id, []) + fruit_top
+        self.top_count[client_id] = self.top_count.get(client_id, 0) + 1
+
+        if self.top_count[client_id] < AGGREGATION_AMOUNT:
+            ack()
+            return
+
+        self.partial_tops[client_id].sort(key=lambda x: x[1], reverse=True)
+        total_top = self.partial_tops[client_id][:TOP_SIZE]
+        self.output_queue.send(message_protocol.internal.serialize([client_id, total_top]))
         ack()
+
+        self.partial_tops.pop(client_id, None)
+        self.top_count.pop(client_id, None)
 
     def start(self):
         self.input_queue.start_consuming(self.process_message)
