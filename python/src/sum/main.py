@@ -44,9 +44,6 @@ class SumFilter:
         self._lock = threading.Lock()
         self.amount_by_fruit = {}  # {client_id: {fruit: FruitItem}}
 
-        # SIGTERM handling
-        signal.signal(signal.SIGTERM, self._handle_sigterm)
-
     def _process_data(self, client_id, fruit, amount):
         logging.info("Process data")
         with self._lock:
@@ -96,7 +93,7 @@ class SumFilter:
         self.input_queue.start_consuming(self.process_data_message)
         t.join()
 
-    def _handle_sigterm(self, signum, frame):
+    def handle_sigterm(self, signum, frame):
         logging.info("Received SIGTERM")
         self.input_queue.stop_consuming()
         self.eof_consume_exchange.stop_consuming()
@@ -104,6 +101,10 @@ class SumFilter:
 def main():
     logging.basicConfig(level=logging.INFO)
     sum_filter = SumFilter()
+
+    # SIGTERM handling
+    signal.signal(signal.SIGTERM, sum_filter.handle_sigterm)
+
     sum_filter.start()
     return 0
 

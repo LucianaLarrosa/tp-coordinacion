@@ -26,9 +26,6 @@ class AggregationFilter:
         self.fruit_top = {}  # {client_id: {fruit: FruitItem}}
         self.eof_count = {}  # {client_id: eof_count}
 
-        # SIGTERM handling
-        signal.signal(signal.SIGTERM, self._handle_sigterm)
-
     def _process_data(self, client_id, fruit, amount):
         logging.info("Processing data message")
         fruit_top_client = self.fruit_top.get(client_id, {})
@@ -68,13 +65,17 @@ class AggregationFilter:
     def start(self):
         self.input_exchange.start_consuming(self.process_message)
 
-    def _handle_sigterm(self, signum, frame):
+    def handle_sigterm(self, signum, frame):
         logging.info("Received SIGTERM")
         self.input_exchange.stop_consuming()
 
 def main():
     logging.basicConfig(level=logging.INFO)
     aggregation_filter = AggregationFilter()
+
+    # SIGTERM handling
+    signal.signal(signal.SIGTERM, aggregation_filter.handle_sigterm)
+
     aggregation_filter.start()
     return 0
 
