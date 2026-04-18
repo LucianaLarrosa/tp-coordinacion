@@ -1,6 +1,5 @@
 import os
 import logging
-import threading
 import hashlib
 import signal
 
@@ -19,11 +18,13 @@ EXCHANGE_NAME = "sum_eof_exchange"
 ROUTING_KEY = "sum_eof"
 EXCHANGE_TYPE = "fanout"
 
+
 class SumFilter:
     def __init__(self):
-        self.input_queue = middleware.MessageMiddlewareQueueRabbitMQ(
-            MOM_HOST, INPUT_QUEUE
+        self.input_consumer = middleware.MessageMiddlewareQueueAndExchangeRabbitMQ(
+            MOM_HOST, INPUT_QUEUE, EXCHANGE_NAME
         )
+
         self.data_output_exchanges = []
         for i in range(AGGREGATION_AMOUNT):
             data_output_exchange = middleware.MessageMiddlewareExchangeRabbitMQ(
@@ -31,35 +32,24 @@ class SumFilter:
             )
             self.data_output_exchanges.append(data_output_exchange)
 
-        # Para publicar el EOF recibido
-        self.eof_publish_exchange = middleware.MessageMiddlewareExchangeRabbitMQ(
-            MOM_HOST, EXCHANGE_NAME, [ROUTING_KEY], EXCHANGE_TYPE
-        )
-
-        # Para consumir los EOFs 
-        self.eof_consume_exchange = middleware.MessageMiddlewareExchangeRabbitMQ(
-            MOM_HOST, EXCHANGE_NAME, [ROUTING_KEY], EXCHANGE_TYPE
-        )
-        
-        self._lock = threading.Lock()
         self.amount_by_fruit = {}  # {client_id: {fruit: FruitItem}}
 
     def _process_data(self, client_id, fruit, amount):
         logging.info("Process data")
-        with self._lock:
-            fruits_client = self.amount_by_fruit.get(
-                client_id, {}
-            )
-            fruits_client[fruit] = fruits_client.get(
-                fruit, fruit_item.FruitItem(fruit, 0)
-            ) + fruit_item.FruitItem(fruit, int(amount))
+        fruits_client = self.amount_by_fruit.get(client_id, {})
+        fruits_client[fruit] = fruits_client.get(
+            fruit, fruit_item.FruitItem(fruit, 0)
+        ) + fruit_item.FruitItem(fruit, int(amount))
 
-            self.amount_by_fruit[client_id] = fruits_client
+        self.amount_by_fruit[client_id] = fruits_client
 
     def _process_eof(self, client_id):
         logging.info("Sending data messages")
         for final_fruit_item in self.amount_by_fruit.get(client_id, {}).values():
-            aggregator = int(hashlib.md5(final_fruit_item.fruit.encode()).hexdigest(), 16) % AGGREGATION_AMOUNT
+            aggregator = (
+                int(hashlib.md5(final_fruit_item.fruit.encode()).hexdigest(), 16)
+                % AGGREGATION_AMOUNT
+            )
 
             self.data_output_exchanges[aggregator].send(
                 message_protocol.internal.serialize(
@@ -75,8 +65,7 @@ class SumFilter:
 
     def process_eof_message(self, message, ack, nack):
         fields = message_protocol.internal.deserialize(message)
-        with self._lock:
-            self._process_eof(*fields)
+        self._process_eof(*fields)
         ack()
 
     def process_data_message(self, message, ack, nack):
@@ -84,19 +73,18 @@ class SumFilter:
         if len(fields) == 3:
             self._process_data(*fields)
         else:
-            self.eof_publish_exchange.send(message)
+            self.input_consumer.send(message)
         ack()
 
     def start(self):
-        t = threading.Thread(target=lambda: self.eof_consume_exchange.start_consuming(self.process_eof_message))
-        t.start()
-        self.input_queue.start_consuming(self.process_data_message)
-        t.join()
+        self.input_consumer.start_consuming(
+            self.process_data_message, self.process_eof_message
+        )
 
     def handle_sigterm(self, signum, frame):
         logging.info("Received SIGTERM")
-        self.input_queue.stop_consuming()
-        self.eof_consume_exchange.stop_consuming()
+        self.input_consumer.stop_consuming()
+
 
 def main():
     logging.basicConfig(level=logging.INFO)
