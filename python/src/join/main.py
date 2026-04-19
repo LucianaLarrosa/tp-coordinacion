@@ -52,6 +52,10 @@ class JoinFilter:
     def start(self):
         self.input_queue.start_consuming(self.process_message)
 
+    def close(self):
+        self.input_queue.close()
+        self.output_queue.close()
+
     def handle_sigterm(self, signum, frame):
         logging.info("Received SIGTERM")
         self.input_queue.stop_consuming()
@@ -64,7 +68,10 @@ def main():
     # SIGTERM handling
     signal.signal(signal.SIGTERM, join_filter.handle_sigterm)
 
-    join_filter.start()
+    try:
+        join_filter.start()
+    finally:
+        join_filter.close()
 
     return 0
 

@@ -81,6 +81,11 @@ class SumFilter:
             self.process_data_message, self.process_eof_message
         )
 
+    def close(self):
+        self.input_consumer.close()
+        for data_output_exchange in self.data_output_exchanges:
+            data_output_exchange.close()
+
     def handle_sigterm(self, signum, frame):
         logging.info("Received SIGTERM")
         self.input_consumer.stop_consuming()
@@ -93,7 +98,11 @@ def main():
     # SIGTERM handling
     signal.signal(signal.SIGTERM, sum_filter.handle_sigterm)
 
-    sum_filter.start()
+    try:
+        sum_filter.start()
+    finally:
+        sum_filter.close()
+        
     return 0
 
 

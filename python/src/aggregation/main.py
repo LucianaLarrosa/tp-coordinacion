@@ -67,6 +67,10 @@ class AggregationFilter:
     def start(self):
         self.input_exchange.start_consuming(self.process_message)
 
+    def close(self):
+        self.input_exchange.close()
+        self.output_queue.close()
+
     def handle_sigterm(self, signum, frame):
         logging.info("Received SIGTERM")
         self.input_exchange.stop_consuming()
@@ -79,7 +83,11 @@ def main():
     # SIGTERM handling
     signal.signal(signal.SIGTERM, aggregation_filter.handle_sigterm)
 
-    aggregation_filter.start()
+    try:
+        aggregation_filter.start()
+    finally:
+        aggregation_filter.close()
+        
     return 0
 
 
