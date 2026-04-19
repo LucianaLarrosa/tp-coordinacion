@@ -25,11 +25,12 @@ class JoinFilter:
         )
 
         self.partial_tops = {}  # {client_id: [fruit_top]}
-        self.top_count = {}     # {client_id: count}
+        self.top_count = {}  # {client_id: count}
 
     def process_message(self, message, ack, nack):
         logging.info("Received top")
-        client_id, fruit_top = message_protocol.internal.deserialize(message)
+        _, payload = message_protocol.internal.deserialize(message)
+        client_id, fruit_top = payload
 
         self.partial_tops[client_id] = self.partial_tops.get(client_id, []) + fruit_top
         self.top_count[client_id] = self.top_count.get(client_id, 0) + 1
@@ -40,7 +41,9 @@ class JoinFilter:
 
         self.partial_tops[client_id].sort(key=lambda x: x[1], reverse=True)
         total_top = self.partial_tops[client_id][:TOP_SIZE]
-        self.output_queue.send(message_protocol.internal.serialize([client_id, total_top]))
+        self.output_queue.send(
+            message_protocol.internal.serialize_data([client_id, total_top])
+        )
         ack()
 
         self.partial_tops.pop(client_id, None)
@@ -52,6 +55,7 @@ class JoinFilter:
     def handle_sigterm(self, signum, frame):
         logging.info("Received SIGTERM")
         self.input_queue.stop_consuming()
+
 
 def main():
     logging.basicConfig(level=logging.INFO)

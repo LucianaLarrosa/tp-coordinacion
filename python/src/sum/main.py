@@ -15,8 +15,6 @@ AGGREGATION_AMOUNT = int(os.environ["AGGREGATION_AMOUNT"])
 AGGREGATION_PREFIX = os.environ["AGGREGATION_PREFIX"]
 
 EXCHANGE_NAME = "sum_eof_exchange"
-ROUTING_KEY = "sum_eof"
-EXCHANGE_TYPE = "fanout"
 
 
 class SumFilter:
@@ -52,27 +50,29 @@ class SumFilter:
             )
 
             self.data_output_exchanges[aggregator].send(
-                message_protocol.internal.serialize(
+                message_protocol.internal.serialize_data(
                     [client_id, final_fruit_item.fruit, final_fruit_item.amount]
                 )
             )
 
         logging.info("Broadcasting EOF message")
         for data_output_exchange in self.data_output_exchanges:
-            data_output_exchange.send(message_protocol.internal.serialize([client_id]))
+            data_output_exchange.send(
+                message_protocol.internal.serialize_eof([client_id])
+            )
 
         self.amount_by_fruit.pop(client_id, None)
 
     def process_eof_message(self, message, ack, nack):
-        fields = message_protocol.internal.deserialize(message)
-        self._process_eof(*fields)
+        _, payload = message_protocol.internal.deserialize(message)
+        self._process_eof(*payload)
         ack()
 
     def process_data_message(self, message, ack, nack):
-        fields = message_protocol.internal.deserialize(message)
-        if len(fields) == 3:
-            self._process_data(*fields)
-        else:
+        msg_type, payload = message_protocol.internal.deserialize(message)
+        if msg_type == message_protocol.internal.MsgType.DATA:
+            self._process_data(*payload)
+        elif msg_type == message_protocol.internal.MsgType.EOF:
             self.input_consumer.send(message)
         ack()
 

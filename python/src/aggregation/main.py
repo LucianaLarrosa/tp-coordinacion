@@ -48,18 +48,20 @@ class AggregationFilter:
         for fi in top_sorted_fruits:
             fruit_top.append((fi.fruit, fi.amount))
 
-        self.output_queue.send(message_protocol.internal.serialize([client_id, fruit_top]))
+        self.output_queue.send(
+            message_protocol.internal.serialize_data([client_id, fruit_top])
+        )
 
         self.fruit_top.pop(client_id, None)
         self.eof_count.pop(client_id, None)
 
     def process_message(self, message, ack, nack):
         logging.info("Process message")
-        fields = message_protocol.internal.deserialize(message)
-        if len(fields) == 3:
-            self._process_data(*fields)
-        else:
-            self._process_eof(*fields)
+        msg_type, payload = message_protocol.internal.deserialize(message)
+        if msg_type == message_protocol.internal.MsgType.DATA:
+            self._process_data(*payload)
+        elif msg_type == message_protocol.internal.MsgType.EOF:
+            self._process_eof(*payload)
         ack()
 
     def start(self):
@@ -68,6 +70,7 @@ class AggregationFilter:
     def handle_sigterm(self, signum, frame):
         logging.info("Received SIGTERM")
         self.input_exchange.stop_consuming()
+
 
 def main():
     logging.basicConfig(level=logging.INFO)
