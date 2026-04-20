@@ -79,3 +79,21 @@ Al momento de la evaluación y ejecución de las pruebas se **descartarán** o *
 - La implementación del protocolo de comunicación externo y `FruitItem`.
 
 Redactar un breve informe explicando el modo en que se coordinan las instancias de Sum y Aggregation, así como el modo en el que el sistema escala respecto a los clientes y a la cantidad de controles.
+
+## Informe
+
+### Escalabilidad
+
+**Clientes:** cada cliente recibe un `client_id` único (UUID) generado en el gateway al momento de conectarse. Este ID viaja en todos los mensajes internos, lo que permite que Sum, Aggregation y Joiner mantengan estado separado por cliente y procesen múltiples clientes concurrentemente sin interferencia. El joiner incluye el `client_id` en el resultado final, lo que permite al gateway entregar la respuesta al cliente correspondiente. 
+
+**Controles:** la cantidad de instancias de Sum y Aggregation se configura únicamente a través de variables de entorno en el docker-compose. El código lee estos valores al arrancar y se adapta sin requerir modificaciones. Agregar más instancias de Sum divide el trabajo de acumulación entre más instancias. Agregar más Aggregation distribuye las frutas entre más instancias, usando hash consistente sobre el nombre de la fruta módulo `AGGREGATION_AMOUNT` para garantizar que la misma fruta siempre sea procesada por el mismo Aggregator. 
+
+### Coordinación entre instancias de Sum
+
+1. **Propagación del EOF:** cuando cualquier Sum recibe `EOF` de un cliente desde la `input_queue`, lo publica en un `fanout exchange`. Todos los Sum (incluyendo el que lo recibió) consumen de ese exchange, por lo que todos se enteran de que ese cliente terminó de enviar datos y cada uno puede enviar sus datos acumulados al Aggregator correspondiente. 
+
+2. **Garantía de orden (prefetch_count=1):** cada Sum consume la `input_queue` y el `fanout exchange` en el mismo canal pika con `prefetch_count=1`. Esto garantiza que el `EOF` no se procesa hasta que el último dato del cliente haya sido acumulado (el canal no puede recibir `EOF` mientras tiene un dato sin ackear). Se elige `prefetch_count=1` para garantizar esta coordinación, a costa de algo de latencia, ya que cada Sum debe completar el procesamiento y ackear cada mensaje antes de poder recibir el siguiente. 
+
+### Coordinación entre instancias de Aggregator
+
+Cada Aggregator recibe datos de todas las instancias de Sum, pero solo para las frutas que le corresponden según el hash consistente (`hashlib.md5(fruta) % AGGREGATION_AMOUNT`). Para detectar cuándo todos los Sum terminaron de enviar sus datos, cada Aggregator cuenta los `EOF`s recibidos, ya que espera exactamente `SUM_AMOUNT` `EOF`s (uno por cada instancia de Sum) antes de calcular el top parcial y enviarlo al Joiner. 
