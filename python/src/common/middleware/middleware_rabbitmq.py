@@ -26,31 +26,24 @@ def _make_pika_callback(on_message_callback):
 
 class MessageMiddlewareQueueRabbitMQ(MessageMiddlewareQueue):
 
-    def __init__(self, host, queue_name, channel=None):
+    def __init__(self, host, queue_name):
         self.queue_name = queue_name
-        self._shared_channel = channel is not None
-
-        if self._shared_channel:
-            self.channel = channel
-        else:
-            self.connection = pika.BlockingConnection(
-                pika.ConnectionParameters(host=host)
-            )
-            self.channel = self.connection.channel()
-            self.channel.confirm_delivery()
+        self.connection = pika.BlockingConnection(
+            pika.ConnectionParameters(host=host)
+        )
+        self.channel = self.connection.channel()
+        self.channel.confirm_delivery()
 
         self.channel.queue_declare(queue=self.queue_name, durable=True)
 
     def start_consuming(self, on_message_callback):
         try:
-            if not self._shared_channel:
-                self.channel.basic_qos(prefetch_count=1)
+            # self.channel.basic_qos(prefetch_count=1)
             self.channel.basic_consume(
                 queue=self.queue_name,
                 on_message_callback=_make_pika_callback(on_message_callback),
             )
-            if not self._shared_channel:
-                self.channel.start_consuming()
+            self.channel.start_consuming()
         except pika.exceptions.AMQPConnectionError:
             raise MessageMiddlewareDisconnectedError()
         except _MESSAGE_ERRORS:
@@ -79,8 +72,7 @@ class MessageMiddlewareQueueRabbitMQ(MessageMiddlewareQueue):
 
     def close(self):
         try:
-            if not self._shared_channel:
-                self.connection.close()
+            self.connection.close()
         except pika.exceptions.AMQPError:
             raise MessageMiddlewareCloseError()
 
@@ -88,20 +80,16 @@ class MessageMiddlewareQueueRabbitMQ(MessageMiddlewareQueue):
 class MessageMiddlewareExchangeRabbitMQ(MessageMiddlewareExchange):
 
     def __init__(
-        self, host, exchange_name, routing_keys, exchange_type="direct", channel=None
+        self, host, exchange_name, routing_keys, exchange_type="direct"
     ):
         self.exchange_name = exchange_name
         self.routing_keys = routing_keys
-        self._shared_channel = channel is not None
-
-        if self._shared_channel:
-            self.channel = channel
-        else:
-            self.connection = pika.BlockingConnection(
-                pika.ConnectionParameters(host=host)
-            )
-            self.channel = self.connection.channel()
-            self.channel.confirm_delivery()
+        
+        self.connection = pika.BlockingConnection(
+            pika.ConnectionParameters(host=host)
+        )
+        self.channel = self.connection.channel()
+        self.channel.confirm_delivery()
 
         self.channel.exchange_declare(
             exchange=self.exchange_name, exchange_type=exchange_type, durable=True
@@ -121,8 +109,7 @@ class MessageMiddlewareExchangeRabbitMQ(MessageMiddlewareExchange):
                 queue=queue_name,
                 on_message_callback=_make_pika_callback(on_message_callback),
             )
-            if not self._shared_channel:
-                self.channel.start_consuming()
+            self.channel.start_consuming()
         except pika.exceptions.AMQPConnectionError:
             raise MessageMiddlewareDisconnectedError()
         except _MESSAGE_ERRORS:
@@ -152,52 +139,7 @@ class MessageMiddlewareExchangeRabbitMQ(MessageMiddlewareExchange):
 
     def close(self):
         try:
-            if not self._shared_channel:
-                self.connection.close()
-        except pika.exceptions.AMQPError:
-            raise MessageMiddlewareCloseError()
-
-
-class MessageMiddlewareQueueAndExchangeRabbitMQ:
-
-    def __init__(self, host, queue_name, exchange_name, routing_keys=None):
-        routing_keys = routing_keys or [""]
-
-        self.connection = pika.BlockingConnection(pika.ConnectionParameters(host=host))
-        self.channel = self.connection.channel()
-        self.channel.confirm_delivery()
-
-        self.queue = MessageMiddlewareQueueRabbitMQ(
-            host, queue_name, channel=self.channel
-        )
-        self.exchange = MessageMiddlewareExchangeRabbitMQ(
-            host, exchange_name, routing_keys, "fanout", channel=self.channel
-        )
-
-    def start_consuming(self, queue_callback, exchange_callback):
-        try:
-            self.channel.basic_qos(prefetch_count=1)
-
-            self.queue.start_consuming(queue_callback)
-            self.exchange.start_consuming(exchange_callback)
-
-            self.channel.start_consuming()
-        except pika.exceptions.AMQPConnectionError:
-            raise MessageMiddlewareDisconnectedError()
-        except _MESSAGE_ERRORS:
-            raise MessageMiddlewareMessageError()
-
-    def stop_consuming(self):
-        try:
-            self.channel.stop_consuming()
-        except pika.exceptions.AMQPConnectionError:
-            raise MessageMiddlewareDisconnectedError()
-
-    def send(self, message):
-        self.exchange.send(message)
-
-    def close(self):
-        try:
             self.connection.close()
         except pika.exceptions.AMQPError:
             raise MessageMiddlewareCloseError()
+
