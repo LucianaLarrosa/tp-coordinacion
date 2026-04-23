@@ -44,6 +44,7 @@ class SumFilter:
         )
 
         self._lock = threading.Lock()
+        self._publish_lock = threading.Lock()
         self._amount_by_fruit = {}  # {client_id: {fruit: FruitItem}}
         self._msg_count = {}  # {client_id: count}
         self._total_count = {}  # {client_id: total_count}
@@ -91,11 +92,12 @@ class SumFilter:
     def _handle_query(self, coordinator_id, client_id):
         with self._lock:
             count = self._msg_count.get(client_id, 0)
-        self.msg_publish_exchange.send(
-            message_protocol.internal.serialize_response(
-                [ID, coordinator_id, client_id, count]
+        with self._publish_lock:
+            self.msg_publish_exchange.send(
+                message_protocol.internal.serialize_response(
+                    [ID, coordinator_id, client_id, count]
+                )
             )
-        )
 
     def _handle_confirm(self, client_id):
         with self._lock:
@@ -124,13 +126,15 @@ class SumFilter:
             else:
                 should_retry = True
         if should_confirm:
-            self.msg_publish_exchange.send(
-                message_protocol.internal.serialize_confirm([client_id])
-            )
+            with self._publish_lock:
+                self.msg_publish_exchange.send(
+                    message_protocol.internal.serialize_confirm([client_id])
+                )
         elif should_retry:
-            self.msg_publish_exchange.send(
-                message_protocol.internal.serialize_query([ID, client_id])
-            )
+            with self._publish_lock:
+                self.msg_publish_exchange.send(
+                    message_protocol.internal.serialize_query([ID, client_id])
+                )
 
     def process_exchange_message(self, message, ack, nack):
         try:
@@ -155,9 +159,10 @@ class SumFilter:
             elif msg_type == message_protocol.internal.MsgType.EOF:
                 client_id, total = payload
                 self._total_count[client_id] = total
-                self.msg_publish_exchange.send(
-                    message_protocol.internal.serialize_query([ID, client_id])
-                )
+                with self._publish_lock:
+                    self.msg_publish_exchange.send(
+                        message_protocol.internal.serialize_query([ID, client_id])
+                    )
         finally:
             ack()
 
