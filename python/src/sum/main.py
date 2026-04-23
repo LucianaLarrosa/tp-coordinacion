@@ -62,9 +62,9 @@ class SumFilter:
 
             self._amount_by_fruit[client_id] = fruits_client
 
-    def _process_eof(self, client_id):
+    def _send_to_aggregators(self, client_id, fruits):
         logging.info("Sending data messages")
-        for final_fruit_item in self._amount_by_fruit.get(client_id, {}).values():
+        for final_fruit_item in fruits.values():
             aggregator = (
                 int(
                     hashlib.md5(
@@ -87,8 +87,6 @@ class SumFilter:
                 message_protocol.internal.serialize_eof([client_id])
             )
 
-        self._amount_by_fruit.pop(client_id, None)
-
     def _handle_query(self, coordinator_id, client_id):
         with self._lock:
             count = self._msg_count.get(client_id, 0)
@@ -101,9 +99,10 @@ class SumFilter:
 
     def _handle_confirm(self, client_id):
         with self._lock:
-            self._process_eof(client_id)
+            fruits = self._amount_by_fruit.pop(client_id, {})
             self._msg_count.pop(client_id, None)
             self._total_count.pop(client_id, None)
+        self._send_to_aggregators(client_id, fruits)
 
     def _handle_response(self, sum_id, coordinator_id, client_id, count):
         if coordinator_id != ID:
@@ -166,12 +165,18 @@ class SumFilter:
         finally:
             ack()
 
-    def start(self):
-        t1 = threading.Thread(
-            target=lambda: self.msg_consume_exchange.start_consuming(
+    def _consume_exchange(self):
+        try:
+            self.msg_consume_exchange.start_consuming(
                 self.process_exchange_message
             )
-        )
+        except Exception:
+            self.input_queue.connection.add_callback_threadsafe(
+                self.input_queue.channel.stop_consuming
+            )
+
+    def start(self):
+        t1 = threading.Thread(target=self._consume_exchange)
         t1.start()
         try:
             self.input_queue.start_consuming(self.process_data_message)

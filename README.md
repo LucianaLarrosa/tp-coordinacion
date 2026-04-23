@@ -98,6 +98,10 @@ Cuando Thread 1 recibe el `EOF` de un cliente, actúa como **coordinador**: publ
 
 Este modelo garantiza que ningún Sum envíe datos al Aggregator hasta que todos hayan terminado de procesar los mensajes de ese cliente, sin depender de parámetros del middleware como `prefetch_count`.
 
+#### Sincronización entre hilos
+
+Tanto Thread 1 como Thread 2 publican mensajes en el exchange de coordinación: Thread 1 al recibir un `EOF` por la `input_queue` (publica una `QUERY`), y Thread 2 al responder a una `QUERY` o al enviar `CONFIRM` y reintentos. Ambos hilos comparten el canal de publicación del middleware, que no es seguro de usar concurrentemente: si dos hilos publican al mismo tiempo pueden intercalar sus operaciones sobre el canal y corromper su estado interno. Por ese motivo, los `send` sobre el exchange de coordinación están protegidos por un lock adicional (`_publish_lock`) que serializa las publicaciones entre ambos hilos.
+
 #### Evolución del diseño
 
 Una primera versión ya utilizaba 2 hilos y un exchange para propagar el `EOF` entre los Sum: cuando una instancia recibía el `EOF` de un cliente por la `input_queue`, lo publicaba en el exchange para que todas las demás se enteraran. Sin embargo, este diseño tenía una _race condition_: las instancias de Sum podían recibir el `EOF` por el exchange y procesarlo (enviando sus datos al Aggregator) sin haber terminado de procesar los mensajes de datos previos de ese cliente. Como resultado, los datos que se enviaban al Aggregator podían estar incompletos.
