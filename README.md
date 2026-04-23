@@ -90,11 +90,11 @@ Redactar un breve informe explicando el modo en que se coordinan las instancias 
 
 ### Coordinación entre instancias de Sum
 
-Cada Sum mantiene 2 hilos: Thread 1 consume de la `input_queue` procesando datos y EOFs, y Thread 2 consume un `fanout exchange` compartido por todos los Sum para coordinar el envío de datos al Aggregator.
+Cada Sum mantiene 2 hilos: Thread 1 consume de la `input_queue` procesando datos y `EOF`s, y Thread 2 consume un `fanout exchange` compartido por todos los Sum para coordinar el envío de datos al Aggregator.
 
-Cada Sum lleva un contador de mensajes procesados por cliente (`_msg_count`). El gateway incluye en el mensaje de EOF la cantidad total de mensajes enviados por ese cliente.
+Cada Sum lleva un contador de mensajes procesados por cliente (`_msg_count`). El gateway incluye en el mensaje de `EOF` la cantidad total de mensajes enviados por ese cliente.
 
-Cuando Thread 1 recibe el EOF de un cliente, actúa como **coordinador**: publica una `QUERY`en el fanout exchange preguntando a todos los Sum cuántos mensajes procesaron de ese cliente. Cada Sum (incluyendo el coordinador) responde con su conteo a través del mismo exchange. El coordinador acumula las respuestas y cuando recibe todas (`SUM_AMOUNT`), suma los conteos y compara con el total del EOF. Si coinciden, publica un `CONFIRM`; si no, reintenta la query. Cuando cada Sum recibe el `CONFIRM`, envía sus datos acumulados al Aggregator correspondiente. 
+Cuando Thread 1 recibe el `EOF` de un cliente, actúa como **coordinador**: publica una `QUERY`en el fanout exchange preguntando a todos los Sum cuántos mensajes procesaron de ese cliente. Cada Sum (incluyendo el coordinador) responde con su conteo a través del mismo exchange. El coordinador acumula las respuestas y cuando recibe todas (`SUM_AMOUNT`), suma los conteos y compara con el total del `EOF`. Si coinciden, publica un `CONFIRM`; si no, reintenta la query. Cuando cada Sum recibe el `CONFIRM`, envía sus datos acumulados al Aggregator correspondiente. 
 
 Este modelo garantiza que ningún Sum envíe datos al Aggregator hasta que todos hayan terminado de procesar los mensajes de ese cliente, sin depender de parámetros del middleware como `prefetch_count`.
 
