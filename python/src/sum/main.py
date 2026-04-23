@@ -175,15 +175,23 @@ class SumFilter:
             t1.join()
 
     def close(self):
-        self.input_queue.close()
-        self.msg_publish_exchange.close()
-        self.msg_consume_exchange.close()
-        for data_output_exchange in self.data_output_exchanges:
-            data_output_exchange.close()
+        for resource in [
+            self.input_queue,
+            self.msg_publish_exchange,
+            self.msg_consume_exchange,
+            *self.data_output_exchanges,
+        ]:
+            try:
+                resource.close()
+            except Exception:
+                logging.exception("Error closing resource")
 
     def handle_sigterm(self, signum, frame):
         logging.info("Received SIGTERM")
-        self.input_queue.stop_consuming()
+        try:
+            self.input_queue.stop_consuming()
+        except Exception:
+            logging.exception("Error stopping consumer on SIGTERM")
 
 def main():
     logging.basicConfig(level=logging.INFO)

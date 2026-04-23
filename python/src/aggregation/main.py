@@ -57,23 +57,31 @@ class AggregationFilter:
 
     def process_message(self, message, ack, nack):
         logging.info("Process message")
-        msg_type, payload = message_protocol.internal.deserialize(message)
-        if msg_type == message_protocol.internal.MsgType.DATA:
-            self._process_data(*payload)
-        elif msg_type == message_protocol.internal.MsgType.EOF:
-            self._process_eof(*payload)
-        ack()
+        try:
+            msg_type, payload = message_protocol.internal.deserialize(message)
+            if msg_type == message_protocol.internal.MsgType.DATA:
+                self._process_data(*payload)
+            elif msg_type == message_protocol.internal.MsgType.EOF:
+                self._process_eof(*payload)
+        finally:
+            ack()
 
     def start(self):
         self.input_exchange.start_consuming(self.process_message)
 
     def close(self):
-        self.input_exchange.close()
-        self.output_queue.close()
+        for resource in [self.input_exchange, self.output_queue]:
+            try:
+                resource.close()
+            except Exception:
+                logging.exception("Error closing resource")
 
     def handle_sigterm(self, signum, frame):
         logging.info("Received SIGTERM")
-        self.input_exchange.stop_consuming()
+        try:
+            self.input_exchange.stop_consuming()
+        except Exception:
+            logging.exception("Error stopping consumer on SIGTERM")
 
 
 def main():

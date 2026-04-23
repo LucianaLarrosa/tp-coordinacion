@@ -98,6 +98,14 @@ Cuando Thread 1 recibe el EOF de un cliente, actúa como **coordinador**: public
 
 Este modelo garantiza que ningún Sum envíe datos al Aggregator hasta que todos hayan terminado de procesar los mensajes de ese cliente, sin depender de parámetros del middleware como `prefetch_count`.
 
+#### Evolución del diseño
+
+Una primera implementación resolvía el problema a nivel del middleware, a través de una clase adicional que permitía que la `input_queue` y el exchange de coordinación consumieran sobre un mismo canal de RabbitMQ. Al compartir canal, el consumo de ambos quedaba serializado: los callbacks se ejecutaban uno a la vez, de forma tal que cuando un Sum recibía el `EOF` no tenía mensajes de datos pendientes de procesar en ese canal. Esta sincronización requería además configurar `prefetch_count=1`, para limitar a un mensaje por vez en el buffer del consumidor.
+
+El principal problema de esta solución era que la correctitud del sistema pasaba a depender de una configuración específica del middleware. Además, requería una clase del middleware con una semántica particular (compartir un canal entre una cola y un exchange) que no formaba parte de la interfaz original.
+
+El protocolo de coordinación actual (`QUERY` / `RESPONSE` / `CONFIRM`) resuelve el mismo problema a nivel aplicación: la sincronización entre Sums se logra explícitamente mediante mensajes de control, comparando el total informado en el `EOF` contra la suma de los conteos reportados por cada Sum. Esto permitió volver a la interfaz original del middleware (sin canales compartidos) y que el sistema siga siendo correcto independientemente del valor de `prefetch_count`.
+
 ### Coordinación entre instancias de Aggregator
 
 Cada Aggregator recibe datos de todas las instancias de Sum, pero solo para las frutas que le corresponden según el hash consistente (`hashlib.md5(client_id + fruta) % AGGREGATION_AMOUNT`). Esto mejora la distribución cuando hay pocas frutas distintas, ya que la misma fruta de distintos clientes puede ir a distintos Aggregators.
