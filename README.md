@@ -100,7 +100,9 @@ Este modelo garantiza que ningún Sum envíe datos al Aggregator hasta que todos
 
 #### Evolución del diseño
 
-Una primera implementación resolvía el problema a nivel del middleware, a través de una clase adicional que permitía que la `input_queue` y el exchange de coordinación consumieran sobre un mismo canal de RabbitMQ. Al compartir canal, el consumo de ambos quedaba serializado: los callbacks se ejecutaban uno a la vez, de forma tal que cuando un Sum recibía el `EOF` no tenía mensajes de datos pendientes de procesar en ese canal. Esta sincronización requería además configurar `prefetch_count=1`, para limitar a un mensaje por vez en el buffer del consumidor.
+Una primera versión ya utilizaba 2 hilos y un exchange para propagar el `EOF` entre los Sum: cuando una instancia recibía el `EOF` de un cliente por la `input_queue`, lo publicaba en el exchange para que todas las demás se enteraran. Sin embargo, este diseño tenía una _race condition_: las instancias de Sum podían recibir el `EOF` por el exchange y procesarlo (enviando sus datos al Aggregator) sin haber terminado de procesar los mensajes de datos previos de ese cliente. Como resultado, los datos que se enviaban al Aggregator podían estar incompletos.
+
+Una segunda implementación intentó resolver este problema a nivel del middleware, a través de una clase adicional que permitía que la `input_queue` y el exchange de `EOF`s consumieran sobre un mismo canal de RabbitMQ. Al compartir canal, el consumo de ambos quedaba serializado: los callbacks se ejecutaban uno a la vez, de forma tal que cuando un Sum recibía el `EOF` no tenía mensajes de datos pendientes de procesar en ese canal. Esta sincronización requería además configurar `prefetch_count=1`, para limitar a un mensaje por vez en el buffer del consumidor.
 
 El principal problema de esta solución era que la correctitud del sistema pasaba a depender de una configuración específica del middleware. Además, requería una clase del middleware con una semántica particular (compartir un canal entre una cola y un exchange) que no formaba parte de la interfaz original.
 
@@ -111,3 +113,7 @@ El protocolo de coordinación actual (`QUERY` / `RESPONSE` / `CONFIRM`) resuelve
 Cada Aggregator recibe datos de todas las instancias de Sum, pero solo para las frutas que le corresponden según el hash consistente (`hashlib.md5(client_id + fruta) % AGGREGATION_AMOUNT`). Esto mejora la distribución cuando hay pocas frutas distintas, ya que la misma fruta de distintos clientes puede ir a distintos Aggregators.
 
 Para detectar cuándo todos los Sum terminaron de enviar sus datos, cada Aggregator cuenta los `EOF`s recibidos, ya que espera exactamente `SUM_AMOUNT` `EOF`s (uno por cada instancia de Sum) antes de calcular el top parcial y enviarlo al Joiner. 
+
+### Joiner
+
+El Joiner recibe los tops parciales de las instancias de Aggregator a través de una única cola, y mantiene estado separado por cliente. Para cada `client_id`, acumula los tops parciales y lleva un contador de cuántos recibió. Cuando el contador llega a `AGGREGATION_AMOUNT` (uno por cada instancia de Aggregator), combina todos los tops parciales en una única lista, la ordena por cantidad de forma descendente y trunca al `TOP_SIZE` configurado. El resultado final se envía al gateway junto con el `client_id`, para que pueda entregarlo al cliente correspondiente.
