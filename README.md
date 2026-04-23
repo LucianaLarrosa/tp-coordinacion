@@ -86,14 +86,20 @@ Redactar un breve informe explicando el modo en que se coordinan las instancias 
 
 **Clientes:** cada cliente recibe un `client_id` único (UUID) generado en el gateway al momento de conectarse. Este ID viaja en todos los mensajes internos, lo que permite que Sum, Aggregation y Joiner mantengan estado separado por cliente y procesen múltiples clientes concurrentemente sin interferencia. El joiner incluye el `client_id` en el resultado final, lo que permite al gateway entregar la respuesta al cliente correspondiente. 
 
-**Controles:** la cantidad de instancias de Sum y Aggregation se configura únicamente a través de variables de entorno en el docker-compose. El código lee estos valores al arrancar y se adapta sin requerir modificaciones. Agregar más instancias de Sum divide el trabajo de acumulación entre más instancias. Agregar más Aggregation distribuye las frutas entre más instancias, usando hash consistente sobre el nombre de la fruta módulo `AGGREGATION_AMOUNT` para garantizar que la misma fruta siempre sea procesada por el mismo Aggregator. 
+**Controles:** la cantidad de instancias de Sum y Aggregation se configura únicamente a través de variables de entorno en el docker-compose. El código lee estos valores al arrancar y se adapta sin requerir modificaciones. Agregar más instancias de Sum divide el trabajo de acumulación entre más instancias. Agregar más Aggregation distribuye las frutas entre más instancias, usando hash consistente sobre la combinación de `client_id` y nombre de la fruta módulo `AGGREGATION_AMOUNT`, lo que mejora la distribución cuando hay pocas frutas distintas. 
 
 ### Coordinación entre instancias de Sum
 
-1. **Propagación del EOF:** cuando cualquier Sum recibe `EOF` de un cliente desde la `input_queue`, lo publica en un `fanout exchange`. Todos los Sum (incluyendo el que lo recibió) consumen de ese exchange, por lo que todos se enteran de que ese cliente terminó de enviar datos y cada uno puede enviar sus datos acumulados al Aggregator correspondiente. 
+Cada Sum mantiene 2 hilos: Thread 1 consume de la `input_queue` procesando datos y EOFs, y Thread 2 consume un `fanout exchange` compartido por todos los Sum para coordinar el envío de datos al Aggregator.
 
-2. **Garantía de orden (prefetch_count=1):** cada Sum consume la `input_queue` y el `fanout exchange` en el mismo canal pika con `prefetch_count=1`. Esto garantiza que el `EOF` no se procesa hasta que el último dato del cliente haya sido acumulado (el canal no puede recibir `EOF` mientras tiene un dato sin ackear). Se elige `prefetch_count=1` para garantizar esta coordinación, a costa de algo de latencia, ya que cada Sum debe completar el procesamiento y ackear cada mensaje antes de poder recibir el siguiente. 
+Cada Sum lleva un contador de mensajes procesados por cliente (`_msg_count`). El gateway incluye en el mensaje de EOF la cantidad total de mensajes enviados por ese cliente.
+
+Cuando Thread 1 recibe el EOF de un cliente, actúa como **coordinador**: publica una `QUERY`en el fanout exchange preguntando a todos los Sum cuántos mensajes procesaron de ese cliente. Cada Sum (incluyendo el coordinador) responde con su conteo a través del mismo exchange. El coordinador acumula las respuestas y cuando recibe todas (`SUM_AMOUNT`), suma los conteos y compara con el total del EOF. Si coinciden, publica un `CONFIRM`; si no, reintenta la query. Cuando cada Sum recibe el `CONFIRM`, envía sus datos acumulados al Aggregator correspondiente. 
+
+Este modelo garantiza que ningún Sum envíe datos al Aggregator hasta que todos hayan terminado de procesar los mensajes de ese cliente, sin depender de parámetros del middleware como `prefetch_count`.
 
 ### Coordinación entre instancias de Aggregator
 
-Cada Aggregator recibe datos de todas las instancias de Sum, pero solo para las frutas que le corresponden según el hash consistente (`hashlib.md5(fruta) % AGGREGATION_AMOUNT`). Para detectar cuándo todos los Sum terminaron de enviar sus datos, cada Aggregator cuenta los `EOF`s recibidos, ya que espera exactamente `SUM_AMOUNT` `EOF`s (uno por cada instancia de Sum) antes de calcular el top parcial y enviarlo al Joiner. 
+Cada Aggregator recibe datos de todas las instancias de Sum, pero solo para las frutas que le corresponden según el hash consistente (`hashlib.md5(client_id + fruta) % AGGREGATION_AMOUNT`). Esto mejora la distribución cuando hay pocas frutas distintas, ya que la misma fruta de distintos clientes puede ir a distintos Aggregators.
+
+Para detectar cuándo todos los Sum terminaron de enviar sus datos, cada Aggregator cuenta los `EOF`s recibidos, ya que espera exactamente `SUM_AMOUNT` `EOF`s (uno por cada instancia de Sum) antes de calcular el top parcial y enviarlo al Joiner. 
