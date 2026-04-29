@@ -24,7 +24,7 @@ class JoinFilter:
             MOM_HOST, OUTPUT_QUEUE
         )
 
-        self.partial_tops = {}  # {client_id: [fruit_top]}
+        self.partial_tops = {}  # {client_id: [FruitItem]}
         self.top_count = {}  # {client_id: count}
 
     def process_message(self, message, ack, nack):
@@ -33,14 +33,22 @@ class JoinFilter:
             _, payload = message_protocol.internal.deserialize(message)
             client_id, fruit_top = payload
 
-            self.partial_tops[client_id] = self.partial_tops.get(client_id, []) + fruit_top
+            fruit_items = []
+            for fruit, amount in fruit_top:
+                fruit_items.append(fruit_item.FruitItem(fruit, amount))
+            self.partial_tops[client_id] = (
+                self.partial_tops.get(client_id, []) + fruit_items
+            )
+
             self.top_count[client_id] = self.top_count.get(client_id, 0) + 1
 
             if self.top_count[client_id] < AGGREGATION_AMOUNT:
                 return
 
-            self.partial_tops[client_id].sort(key=lambda x: x[1], reverse=True)
-            total_top = self.partial_tops[client_id][:TOP_SIZE]
+            self.partial_tops[client_id].sort(reverse=True)
+            total_top = []
+            for fi in self.partial_tops[client_id][:TOP_SIZE]:
+                total_top.append((fi.fruit, fi.amount))
             self.output_queue.send(
                 message_protocol.internal.serialize_data([client_id, total_top])
             )

@@ -120,4 +120,8 @@ Para detectar cuándo todos los Sum terminaron de enviar sus datos, cada Aggrega
 
 ### Joiner
 
-El Joiner recibe los tops parciales de las instancias de Aggregator a través de una única cola, y mantiene estado separado por cliente. Para cada `client_id`, acumula los tops parciales y lleva un contador de cuántos recibió. Cuando el contador llega a `AGGREGATION_AMOUNT` (uno por cada instancia de Aggregator), combina todos los tops parciales en una única lista, la ordena por cantidad de forma descendente y trunca al `TOP_SIZE` configurado. El resultado final se envía al gateway junto con el `client_id`, para que pueda entregarlo al cliente correspondiente.
+El Joiner recibe los tops parciales de las instancias de Aggregator a través de una única cola, y mantiene estado separado por cliente. Para cada `client_id`, acumula los tops parciales y lleva un contador de cuántos recibió. Cuando el contador llega a `AGGREGATION_AMOUNT` (uno por cada instancia de Aggregator), combina todos los tops parciales en una única lista, la ordena y trunca al `TOP_SIZE` configurado. El resultado final se envía al gateway junto con el `client_id`, para que pueda entregarlo al cliente correspondiente.
+
+### Ordenamiento y la implementación de `FruitItem`
+
+En una versión inicial, el Joiner trabajaba directamente con las tuplas `(fruta, cantidad)` recibidas y las ordenaba por cantidad. Esto hacía que, al modificar la implementación de la comparación de `FruitItem`, el ordenamiento del Joiner no se viera afectado y el top final dejara de coincidir con el esperado. Para resolverlo, el Joiner ahora reconstruye instancias de `FruitItem` a partir de las tuplas y delega el ordenamiento al operador de comparación de la clase.
